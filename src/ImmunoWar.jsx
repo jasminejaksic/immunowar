@@ -482,18 +482,13 @@ export default function ImmunoWar(){
     for(const p of g.pathogens)for(const c of g.cells)if(Math.hypot(p.x-c.x,p.y-c.y)<p.r+CELLS[c.type].r+2){c.hp-=p.dmg*dt*3;if(c.hp<=0)addParts(g,c.x,c.y,CELLS[c.type].col,18);}
     g.cells=g.cells.filter(c=>c.hp>0);g.pathogens=g.pathogens.filter(p=>p.hp>0);
 
-    // Cell attack — targeting modes + category bonus
+    // Cell attack — closest enemy in range + category bonus
     for(const c of g.cells){
       if(c.cd>0){c.cd-=dt;continue;}
       const def=CELLS[c.type];
-      const inRange=g.pathogens.filter(p=>Math.hypot(p.x-c.x,p.y-c.y)<=def.range);
-      if(!inRange.length)continue;
-      const mode=c.target||"first";
-      let near=null;
-      if(mode==="first")     near=inRange.reduce((a,b)=>(Math.hypot(b.x-CX,b.y-CY)<Math.hypot(a.x-CX,a.y-CY)?b:a));
-      else if(mode==="last") near=inRange.reduce((a,b)=>(Math.hypot(b.x-CX,b.y-CY)>Math.hypot(a.x-CX,a.y-CY)?b:a));
-      else if(mode==="strong")near=inRange.reduce((a,b)=>b.hp>a.hp?b:a);
-      else                    near=inRange.reduce((a,b)=>Math.hypot(b.x-c.x,b.y-c.y)<Math.hypot(a.x-c.x,a.y-c.y)?b:a);
+      let near=null,nd=Infinity;
+      for(const p of g.pathogens){const d=Math.hypot(p.x-c.x,p.y-c.y);if(d<=def.range&&d<nd){near=p;nd=d;}}
+      if(!near)continue;
       c.cd=1/def.aps;
       const catMult=def.catBonus?.[near.cat]||1;
       const dmg=Math.round(def.dmg*(g.mods.cMult[c.type]||1)*g.mods.atkMult*catMult);
@@ -580,15 +575,14 @@ export default function ImmunoWar(){
       const hp2=c.hp/c.maxHp;
       ctx.fillStyle="#0008";ctx.fillRect(c.x-def.r,c.y+def.r+2,def.r*2,3);
       ctx.fillStyle=hp2>0.5?"#66BB6A":hp2>0.25?"#FFD54F":"#EF5350";ctx.fillRect(c.x-def.r,c.y+def.r+2,def.r*2*hp2,3);
-      // Targeting mode label
-      const tm=c.target||"close";
-      ctx.font="6px monospace";ctx.textAlign="center";ctx.textBaseline="top";
-      ctx.fillStyle="rgba(255,255,255,0.5)";ctx.fillText(tm.toUpperCase(),c.x,c.y+def.r+7);
-      // Selection ring
+      // Selection / drag ring
       if(c.id===selId){
         const sp=(Math.sin(now/200)+1)/2;
         ctx.beginPath();ctx.arc(c.x,c.y,def.r+5+sp*2,0,Math.PI*2);
         ctx.strokeStyle=`rgba(255,255,255,${0.7+sp*0.3})`;ctx.lineWidth=2;ctx.stroke();
+        // Show move cursor hint
+        ctx.font="7px monospace";ctx.textAlign="center";ctx.textBaseline="top";
+        ctx.fillStyle="rgba(255,255,255,0.55)";ctx.fillText("DRAG TO MOVE",c.x,c.y+def.r+8);
       }
     }
 
@@ -620,9 +614,12 @@ export default function ImmunoWar(){
     let last=performance.now();
     const loop=now=>{
       const rawDt=Math.min((now-last)/1000,0.05);
-      const dt=rawDt*gameSpeedRef.current;
       last=now;
-      update(dt,now);draw(ctx,now,selCellRef.current);
+      if(!pausedRef.current){
+        const dt=rawDt*gameSpeedRef.current;
+        update(dt,now);
+      }
+      draw(ctx,now,selCellRef.current);
       const g=gRef.current;
       if(g){
         fRef.current++;
@@ -654,8 +651,15 @@ export default function ImmunoWar(){
   const startPlay=()=>{scrRef.current="game";setScreen("game");};
   const showMsg=(text,color="#EF9A9A")=>{setPlaceMsg({text,color});setTimeout(()=>setPlaceMsg(null),1400);};
 
-  const TARGET_MODES=["close","first","last","strong"];
-  const TARGET_LABELS={close:"CLOSE",first:"FIRST",last:"LAST",strong:"STRONG"};
+  const [paused, setPaused] = useState(false);
+  const pausedRef = useRef(false);
+  useEffect(()=>{pausedRef.current=paused;},[paused]);
+
+  // Spacebar to pause
+  useEffect(()=>{
+    const h=e=>{if(e.code==="Space"&&scrRef.current==="game"){e.preventDefault();setPaused(v=>!v);}};
+    window.addEventListener("keydown",h);return()=>window.removeEventListener("keydown",h);
+  },[]);
 
   const sellCell=()=>{
     const g=gRef.current;if(!g||!selectedCell)return;
@@ -668,13 +672,66 @@ export default function ImmunoWar(){
     setSelectedCell(null);
   };
 
-  const cycleTarget=()=>{
+  const sellCell=()=>{
     const g=gRef.current;if(!g||!selectedCell)return;
-    const c=g.cells.find(c=>c.id===selectedCell);if(!c)return;
-    const cur=c.target||"close";
-    const next=TARGET_MODES[(TARGET_MODES.indexOf(cur)+1)%TARGET_MODES.length];
-    c.target=next;
-    setSelectedCell(selectedCell); // force re-render
+    const idx=g.cells.findIndex(c=>c.id===selectedCell);if(idx<0)return;
+    const c=g.cells[idx];
+    const refund=Math.round(CELLS[c.type].cost*0.6);
+    g.energy=Math.min(ECAP,g.energy+refund);
+    g.cells.splice(idx,1);
+    addParts(g,c.x,c.y,CELLS[c.type].col,12);
+    setSelectedCell(null);
+  };
+
+  // Drag state stored in refs to avoid re-renders during drag
+  const dragRef=useRef(null); // {cellId, startX, startY, origX, origY}
+
+  const getCanvasXY=(e,canvas)=>{
+    const rect=canvas.getBoundingClientRect();
+    return{x:(e.clientX-rect.left)*(CW/rect.width),y:(e.clientY-rect.top)*(CH/rect.height)};
+  };
+
+  const handleMouseDown=e=>{
+    const g=gRef.current;if(!g||scrRef.current!=="game")return;
+    const canvas=cvsRef.current;if(!canvas)return;
+    const{x,y}=getCanvasXY(e,canvas);
+    for(const c of g.cells){
+      if(Math.hypot(x-c.x,y-c.y)<CELLS[c.type].r+6){
+        dragRef.current={cellId:c.id,origX:c.x,origY:c.y};
+        setSelectedCell(c.id);
+        e.preventDefault();
+        return;
+      }
+    }
+  };
+
+  const handleMouseMove=e=>{
+    const rect=cvsRef.current?.getBoundingClientRect();if(!rect)return;
+    const x=(e.clientX-rect.left)*(CW/rect.width),y=(e.clientY-rect.top)*(CH/rect.height);
+    mRef.current={x,y};
+    const g=gRef.current;if(!g||!dragRef.current)return;
+    const c=g.cells.find(c=>c.id===dragRef.current.cellId);if(!c)return;
+    c.x=x;c.y=y; // live drag — validation on mouseup
+  };
+
+  const handleMouseUp=e=>{
+    const g=gRef.current;
+    if(!g||!dragRef.current){dragRef.current=null;return;}
+    const c=g.cells.find(c=>c.id===dragRef.current.cellId);
+    if(c){
+      const def=CELLS[c.type];
+      const tooClose=Math.hypot(c.x-CX,c.y-CY)<CR+def.r+8;
+      const overlap=g.cells.some(o=>o.id!==c.id&&Math.hypot(c.x-o.x,c.y-o.y)<def.r+CELLS[o.type].r);
+      const outOfBounds=c.x<def.r||c.x>CW-def.r||c.y<def.r||c.y>CH-def.r;
+      if(tooClose||overlap||outOfBounds){
+        // Snap back to original position
+        c.x=dragRef.current.origX;c.y=dragRef.current.origY;
+        showMsg(tooClose?"Too close to the core":"Can't place there");
+      } else {
+        SFX.play("place");
+      }
+    }
+    dragRef.current=null;
   };
 
   const handleClick=e=>{
@@ -682,17 +739,12 @@ export default function ImmunoWar(){
     const rect=e.currentTarget.getBoundingClientRect();
     const x=(e.clientX-rect.left)*(CW/rect.width),y=(e.clientY-rect.top)*(CH/rect.height);
 
-    // Check if clicking on an existing cell first
-    for(const c of g.cells){
-      const def=CELLS[c.type];
-      if(Math.hypot(x-c.x,y-c.y)<def.r+4){
-        setSelectedCell(prev=>prev===c.id?null:c.id);
-        return;
-      }
+    // If we just finished a drag, don't treat as a place click
+    if(selectedCell){
+      const onCell=g.cells.some(c=>Math.hypot(x-c.x,y-c.y)<CELLS[c.type].r+6);
+      if(!onCell){setSelectedCell(null);}
+      return;
     }
-
-    // Deselect if clicking empty space while something selected
-    if(selectedCell){setSelectedCell(null);return;}
 
     const type=selRef.current,def=CELLS[type];
     if(g.cells.length>=MAX_C){showMsg("No cell slots left");return;}
@@ -700,8 +752,7 @@ export default function ImmunoWar(){
     if(Math.hypot(x-CX,y-CY)<CR+def.r+8){showMsg("Too close to the core");return;}
     for(const c of g.cells)if(Math.hypot(x-c.x,y-c.y)<def.r+CELLS[c.type].r){showMsg("Too close to another cell");return;}
     g.energy-=def.cost;
-    const newCell={id:uid(),type,x,y,hp:def.maxHp,maxHp:def.maxHp,cd:0,target:"close"};
-    g.cells.push(newCell);SFX.play("place");
+    g.cells.push({id:uid(),type,x,y,hp:def.maxHp,maxHp:def.maxHp,cd:0});SFX.play("place");
   };
   const handleMM=e=>{const rect=e.currentTarget.getBoundingClientRect();mRef.current={x:(e.clientX-rect.left)*(CW/rect.width),y:(e.clientY-rect.top)*(CH/rect.height)};};
   const toggleSfx=()=>{SFX.muted=!SFX.muted;setSfxOn(v=>!v);};
@@ -878,15 +929,28 @@ export default function ImmunoWar(){
           <span style={{marginLeft:"auto",display:"flex",gap:12,alignItems:"center"}}>
             <span style={{fontSize:10,color:"rgba(255,255,255,0.6)"}}>SCORE <span style={{color:"#fff",fontWeight:"bold"}}>{ui.score.toLocaleString()}</span></span>
             {g?.adminRun&&<span style={{fontSize:8,color:"#FF9800",letterSpacing:1}}>ADMIN</span>}
-            <button onClick={()=>{const s=gameSpeed===1?2:1;setGameSpeed(s);gameSpeedRef.current=s;}} style={{background:gameSpeed===2?"rgba(255,220,100,0.15)":"transparent",border:`1px solid ${gameSpeed===2?"rgba(255,220,100,0.5)":"rgba(255,255,255,0.2)"}`,borderRadius:3,color:gameSpeed===2?"#FFE082":"rgba(255,255,255,0.5)",fontSize:9,letterSpacing:2,padding:"2px 8px",cursor:"pointer",fontFamily:"monospace",fontWeight:"bold"}}>{gameSpeed===2?"2× SPEED":"1× SPEED"}</button>
+            <button onClick={()=>{const s=gameSpeed===1?2:gameSpeed===2?3:1;setGameSpeed(s);gameSpeedRef.current=s;}} style={{background:gameSpeed>1?"rgba(255,220,100,0.15)":"transparent",border:`1px solid ${gameSpeed>1?"rgba(255,220,100,0.5)":"rgba(255,255,255,0.2)"}`,borderRadius:3,color:gameSpeed>1?"#FFE082":"rgba(255,255,255,0.5)",fontSize:9,letterSpacing:2,padding:"2px 8px",cursor:"pointer",fontFamily:"monospace",fontWeight:"bold"}}>{gameSpeed}× SPEED</button>
+            <button onClick={()=>setPaused(v=>!v)} style={{background:paused?"rgba(100,200,100,0.15)":"transparent",border:`1px solid ${paused?"rgba(100,200,100,0.4)":"rgba(255,255,255,0.2)"}`,borderRadius:3,color:paused?"#A5D6A7":"rgba(255,255,255,0.5)",fontSize:9,letterSpacing:2,padding:"2px 8px",cursor:"pointer",fontFamily:"monospace",fontWeight:"bold"}}>{paused?"▶ RESUME":"⏸ PAUSE"}</button>
             <button onClick={toggleSfx} style={{background:"transparent",border:"1px solid rgba(255,255,255,0.2)",borderRadius:3,color:sfxOn?"#80DEEA":"rgba(255,255,255,0.4)",fontSize:8,letterSpacing:2,padding:"2px 6px",cursor:"pointer",fontFamily:"monospace"}}>{sfxOn?"SFX ON":"SFX OFF"}</button>
           </span>
         </div>
         <div style={{display:"flex",flex:1,overflow:"hidden"}}>
           <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",position:"relative",background:ui.isBonus?"#120005":"#030f1d"}}>
             <canvas ref={cvsRef}
-              style={{display:"block",width:canvCss.w,height:canvCss.h,cursor:"crosshair"}}
-              onClick={handleClick} onMouseMove={handleMM} onMouseLeave={()=>{mRef.current={x:-999,y:-999};setSelectedCell(null);}}/>
+              style={{display:"block",width:canvCss.w,height:canvCss.h,cursor:selectedCell?"grab":"crosshair"}}
+              onClick={handleClick}
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={()=>{handleMouseUp();mRef.current={x:-999,y:-999};}}/>
+            {paused&&(
+              <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.55)",pointerEvents:"none"}}>
+                <div style={{textAlign:"center",fontFamily:"monospace"}}>
+                  <div style={{fontSize:32,fontWeight:900,color:"#A5D6A7",letterSpacing:6}}>PAUSED</div>
+                  <div style={{fontSize:10,color:"rgba(255,255,255,0.45)",marginTop:8,letterSpacing:2}}>PRESS SPACE OR CLICK RESUME</div>
+                </div>
+              </div>
+            )}
             {placeMsg&&<div style={{position:"absolute",bottom:12,left:"50%",transform:"translateX(-50%)",background:"rgba(0,0,0,0.82)",border:`1px solid ${placeMsg.color}55`,borderRadius:5,padding:"5px 16px",fontSize:11,color:placeMsg.color,fontFamily:"monospace",pointerEvents:"none",whiteSpace:"nowrap"}}>{placeMsg.text}</div>}
           </div>
           <div style={{width:216,background:"rgba(0,0,0,0.58)",borderLeft:`1px solid ${ui.isBonus?"rgba(200,0,50,0.1)":"rgba(0,200,255,0.07)"}`,padding:12,display:"flex",flexDirection:"column",gap:10,overflowY:"auto",flexShrink:0}}>
@@ -911,23 +975,14 @@ export default function ImmunoWar(){
               if(!sc)return null;
               const def=CELLS[sc.type];
               const refund=Math.round(def.cost*0.6);
-              const mode=sc.target||"close";
               const bonus=def.catBonus?Object.entries(def.catBonus).map(([k,v])=>`+${Math.round((v-1)*100)}% vs ${k}`).join(", "):null;
               return(
                 <div style={{padding:"9px 10px",background:"rgba(255,255,255,0.06)",borderRadius:7,border:`2px solid ${def.col}55`}}>
-                  <div style={{fontSize:10,fontWeight:"bold",color:def.col,marginBottom:5}}>{def.name} SELECTED</div>
-                  <div style={{fontSize:8,color:"rgba(255,255,255,0.55)",marginBottom:6}}>{bonus||"No category bonus"}</div>
-                  <div style={{fontSize:8,color:"rgba(255,255,255,0.45)",marginBottom:8}}>
-                    HP: {Math.ceil(sc.hp)}/{sc.maxHp}
-                  </div>
-                  <div style={{fontSize:7,color:"rgba(255,255,255,0.4)",marginBottom:4,letterSpacing:2}}>TARGETING</div>
-                  <div style={{display:"flex",gap:4,marginBottom:8,flexWrap:"wrap"}}>
-                    {TARGET_MODES.map(m=>(
-                      <button key={m} onClick={()=>{if(sc){sc.target=m;setSelectedCell(selectedCell);}}} style={{padding:"3px 7px",fontSize:8,background:mode===m?def.col+"33":"transparent",border:`1px solid ${mode===m?def.col:"rgba(255,255,255,0.15)"}`,borderRadius:3,color:mode===m?def.col:"rgba(255,255,255,0.5)",cursor:"pointer",fontFamily:"monospace"}}>{TARGET_LABELS[m]}</button>
-                    ))}
-                  </div>
-                  <button onClick={sellCell} style={{width:"100%",padding:"5px",fontSize:9,fontWeight:"bold",background:"rgba(239,83,80,0.15)",border:"1px solid rgba(239,83,80,0.35)",borderRadius:4,color:"#EF9A9A",cursor:"pointer",fontFamily:"monospace"}}>SELL (+{refund}E)</button>
-                  <button onClick={()=>setSelectedCell(null)} style={{width:"100%",marginTop:4,padding:"4px",fontSize:8,background:"transparent",border:"1px solid rgba(255,255,255,0.1)",borderRadius:4,color:"rgba(255,255,255,0.35)",cursor:"pointer",fontFamily:"monospace"}}>DESELECT</button>
+                  <div style={{fontSize:10,fontWeight:"bold",color:def.col,marginBottom:4}}>{def.name}</div>
+                  {bonus&&<div style={{fontSize:8,color:"rgba(255,255,255,0.5)",marginBottom:4}}>{bonus}</div>}
+                  <div style={{fontSize:8,color:"rgba(255,255,255,0.4)",marginBottom:8}}>HP: {Math.ceil(sc.hp)}/{sc.maxHp} · Drag to move</div>
+                  <button onClick={sellCell} style={{width:"100%",padding:"6px",fontSize:9,fontWeight:"bold",background:"rgba(239,83,80,0.15)",border:"1px solid rgba(239,83,80,0.35)",borderRadius:4,color:"#EF9A9A",cursor:"pointer",fontFamily:"monospace"}}>DESTROY (+{refund}E)</button>
+                  <button onClick={()=>setSelectedCell(null)} style={{width:"100%",marginTop:4,padding:"4px",fontSize:8,background:"transparent",border:"1px solid rgba(255,255,255,0.1)",borderRadius:4,color:"rgba(255,255,255,0.3)",cursor:"pointer",fontFamily:"monospace"}}>DESELECT</button>
                 </div>
               );
             })()}
