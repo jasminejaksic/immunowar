@@ -732,10 +732,12 @@ export default function ImmunoWar(){
             </div>
           ))}
         </div>
-        <button onClick={()=>setScreen("character")} style={BS("linear-gradient(135deg,#00B0D8,#7B1FA2)")}>DEPLOY IMMUNE SYSTEM</button>
-        <button onClick={()=>setShowLb(v=>!v)} style={{marginTop:12,background:"transparent",border:"1px solid rgba(255,255,255,0.15)",borderRadius:4,color:"rgba(255,255,255,0.5)",fontSize:10,letterSpacing:3,padding:"8px 28px",cursor:"pointer",fontFamily:"monospace"}}>
-          {showLb?"HIDE LEADERBOARD":"LEADERBOARD"}
-        </button>
+        <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:12}}>
+          <button onClick={()=>setScreen("character")} style={BS("linear-gradient(135deg,#00B0D8,#7B1FA2)")}>DEPLOY IMMUNE SYSTEM</button>
+          <button onClick={()=>setShowLb(v=>!v)} style={{background:"transparent",border:"1px solid rgba(255,255,255,0.15)",borderRadius:4,color:"rgba(255,255,255,0.5)",fontSize:10,letterSpacing:3,padding:"8px 28px",cursor:"pointer",fontFamily:"monospace"}}>
+            {showLb?"HIDE LEADERBOARD":"LEADERBOARD"}
+          </button>
+        </div>
         {showLb&&(
           <div style={{marginTop:16,maxWidth:480,width:"100%"}}>
             <Leaderboard scores={lb} currentScore={null} currentName={null}/>
