@@ -13,10 +13,10 @@ const SFX={ctx:null,muted:false,gc(){if(!this.ctx)try{this.ctx=new(window.AudioC
 
 // ─── CELLS ───────────────────────────────────────────────────────────────────
 const CELLS={
-  neutrophil:{name:"Neutrophil",cost:15,maxHp:60, dmg:9, range:88, aps:1.3, col:"#26C6DA",r:14,desc:"AoE splash. Hits enemies near target.",splash:true,splashR:38,splashMult:0.45},
-  macrophage:{name:"Macrophage",cost:30,maxHp:150,dmg:28,range:60, aps:0.55,col:"#66BB6A",r:21,desc:"Tank. High HP, single target."},
-  tcell:     {name:"T-Cell",    cost:25,maxHp:44, dmg:15,range:140,aps:2.2, col:"#FFA726",r:13,desc:"Rapid-fire specialist."},
-  bcell:     {name:"B-Cell",    cost:40,maxHp:38, dmg:25,range:215,aps:0.85,col:"#AB47BC",r:14,desc:"Long-range antibody launcher."},
+  neutrophil:{name:"Neutrophil",cost:15,maxHp:60, dmg:9, range:88, aps:1.3, col:"#26C6DA",r:14,desc:"AoE splash. +25% vs bacteria.",splash:true,splashR:38,splashMult:0.45,catBonus:{bacteria:1.25}},
+  macrophage:{name:"Macrophage",cost:30,maxHp:150,dmg:28,range:60, aps:0.55,col:"#66BB6A",r:21,desc:"Tank. +25% vs bacteria & fungi.",catBonus:{bacteria:1.25,fungi:1.25}},
+  tcell:     {name:"T-Cell",    cost:25,maxHp:44, dmg:15,range:140,aps:2.2, col:"#FFA726",r:13,desc:"Rapid-fire. +25% vs virus & cancer.",catBonus:{virus:1.25,cancer:1.25}},
+  bcell:     {name:"B-Cell",    cost:40,maxHp:38, dmg:25,range:215,aps:0.85,col:"#AB47BC",r:14,desc:"Long range. +25% vs virus.",catBonus:{virus:1.25}},
 };
 
 // ─── PATHOGENS ───────────────────────────────────────────────────────────────
@@ -314,13 +314,19 @@ export default function ImmunoWar(){
   const [checkpoint, setCheckpoint]= useState(null);
   const [cpLeft,     setCpLeft]    = useState(2);
   const [adminMode,  setAdminMode] = useState(false);
+  const [showLb,     setShowLb]    = useState(false);
   const [canvCss,    setCanvCss]   = useState({w:CW,h:CH});
   const [ui,setUi]=useState({hp:100,maxHp:100,energy:60,cells:0,lvl:0,wave:0,totalWaves:2,score:0,phase:"waveIdle",countdown:4,isBonus:false,levName:""});
 
+  const [gameSpeed,    setGameSpeed]    = useState(1);
+  const [selectedCell, setSelectedCell] = useState(null);
+  const gameSpeedRef = useRef(1);
   const cvsRef=useRef(null),rafRef=useRef(null),gRef=useRef(null);
   const selRef=useRef("neutrophil"),scrRef=useRef("title");
   const mRef=useRef({x:-999,y:-999}),fRef=useRef(0);
   const adminKeysRef=useRef(""),retryRef=useRef(null);
+
+  useEffect(()=>{gameSpeedRef.current=gameSpeed;},[gameSpeed]);
 
   useEffect(()=>{loadScores().then(setLb);},[]);
   useEffect(()=>{selRef.current=sel;},[sel]);
@@ -366,9 +372,11 @@ export default function ImmunoWar(){
   const quickRetry=()=>{
     const r=retryRef.current;if(!r)return;
     const mods=getMods(r.ch);
-    gRef.current=makeG(mods,r.lvl,r.isBonus,r.comp,mods.eStart);
-    gRef.current.score=0;
+    const prevScore=gRef.current?.score||0;
+    gRef.current=makeG(mods,r.lvl,r.isBonus,r.comp,ECAP);
+    gRef.current.score=prevScore; // carry score forward — already saved to LB on death
     setCheckpoint(r.checkpoint);setCpLeft(r.cpLeft);
+    setSelectedCell(null);setGameSpeed(1);gameSpeedRef.current=1;
     scrRef.current="game";setScreen("game");
   };
 
@@ -474,15 +482,22 @@ export default function ImmunoWar(){
     for(const p of g.pathogens)for(const c of g.cells)if(Math.hypot(p.x-c.x,p.y-c.y)<p.r+CELLS[c.type].r+2){c.hp-=p.dmg*dt*3;if(c.hp<=0)addParts(g,c.x,c.y,CELLS[c.type].col,18);}
     g.cells=g.cells.filter(c=>c.hp>0);g.pathogens=g.pathogens.filter(p=>p.hp>0);
 
-    // Cell attack
+    // Cell attack — targeting modes + category bonus
     for(const c of g.cells){
       if(c.cd>0){c.cd-=dt;continue;}
-      const def=CELLS[c.type];let near=null,nd=Infinity;
-      for(const p of g.pathogens){const d=Math.hypot(p.x-c.x,p.y-c.y);if(d<=def.range&&d<nd){near=p;nd=d;}}
-      if(!near)continue;
+      const def=CELLS[c.type];
+      const inRange=g.pathogens.filter(p=>Math.hypot(p.x-c.x,p.y-c.y)<=def.range);
+      if(!inRange.length)continue;
+      const mode=c.target||"first";
+      let near=null;
+      if(mode==="first")     near=inRange.reduce((a,b)=>(Math.hypot(b.x-CX,b.y-CY)<Math.hypot(a.x-CX,a.y-CY)?b:a));
+      else if(mode==="last") near=inRange.reduce((a,b)=>(Math.hypot(b.x-CX,b.y-CY)>Math.hypot(a.x-CX,a.y-CY)?b:a));
+      else if(mode==="strong")near=inRange.reduce((a,b)=>b.hp>a.hp?b:a);
+      else                    near=inRange.reduce((a,b)=>Math.hypot(b.x-c.x,b.y-c.y)<Math.hypot(a.x-c.x,a.y-c.y)?b:a);
       c.cd=1/def.aps;
-      const dmg=Math.round(def.dmg*(g.mods.cMult[c.type]||1)*g.mods.atkMult);
-      g.projs.push({id:uid(),x:c.x,y:c.y,tx:near.x,ty:near.y,tid:near.id,dmg,spd:300,col:def.col,splash:def.splash||false,splashR:def.splashR||0,splashMult:def.splashMult||0});
+      const catMult=def.catBonus?.[near.cat]||1;
+      const dmg=Math.round(def.dmg*(g.mods.cMult[c.type]||1)*g.mods.atkMult*catMult);
+      g.projs.push({id:uid(),x:c.x,y:c.y,tx:near.x,ty:near.y,tid:near.id,dmg,spd:300,col:catMult>1?"#ffffff":def.col,splash:def.splash||false,splashR:def.splashR||0,splashMult:def.splashMult||0});
     }
 
     // Projectile movement + hit
@@ -520,11 +535,9 @@ export default function ImmunoWar(){
     if(g.bodyHp<=0){g.phase="gameOver";SFX.play("gameOver");}
   };
 
-  const draw=(ctx,now)=>{
+  const draw=(ctx,now,selId)=>{
     const g=gRef.current;if(!g)return;
-    const dpr=window.devicePixelRatio||1;
-    ctx.save();ctx.scale(dpr,dpr);
-
+    // DPR scale already set on canvas.width/height — just draw in logical coords
     ctx.fillStyle=g.isBonus?"#120005":"#030f1d";ctx.fillRect(0,0,CW,CH);
     ctx.strokeStyle=g.isBonus?"rgba(180,0,50,0.05)":"rgba(0,130,190,0.05)";ctx.lineWidth=0.5;
     for(let r=-1;r<CH/26+2;r++)for(let c=-1;c<CW/38+2;c++){
@@ -567,6 +580,16 @@ export default function ImmunoWar(){
       const hp2=c.hp/c.maxHp;
       ctx.fillStyle="#0008";ctx.fillRect(c.x-def.r,c.y+def.r+2,def.r*2,3);
       ctx.fillStyle=hp2>0.5?"#66BB6A":hp2>0.25?"#FFD54F":"#EF5350";ctx.fillRect(c.x-def.r,c.y+def.r+2,def.r*2*hp2,3);
+      // Targeting mode label
+      const tm=c.target||"close";
+      ctx.font="6px monospace";ctx.textAlign="center";ctx.textBaseline="top";
+      ctx.fillStyle="rgba(255,255,255,0.5)";ctx.fillText(tm.toUpperCase(),c.x,c.y+def.r+7);
+      // Selection ring
+      if(c.id===selId){
+        const sp=(Math.sin(now/200)+1)/2;
+        ctx.beginPath();ctx.arc(c.x,c.y,def.r+5+sp*2,0,Math.PI*2);
+        ctx.strokeStyle=`rgba(255,255,255,${0.7+sp*0.3})`;ctx.lineWidth=2;ctx.stroke();
+      }
     }
 
     // Pathogens
@@ -581,22 +604,25 @@ export default function ImmunoWar(){
 
     // Particles
     for(const p of g.parts){const a=Math.max(0,p.life/0.7);ctx.beginPath();ctx.arc(p.x,p.y,p.r*a,0,Math.PI*2);ctx.fillStyle=p.col+Math.floor(a*200).toString(16).padStart(2,"0");ctx.fill();}
-
-    ctx.restore();
   };
 
   // ─── GAME LOOP ──────────────────────────────────────────────────────────────
+  const selCellRef=useRef(null);
+  useEffect(()=>{selCellRef.current=selectedCell;},[selectedCell]);
+
   useEffect(()=>{
     if(screen!=="game")return;
     const canvas=cvsRef.current;if(!canvas)return;
-    // HiDPI setup
     const dpr=window.devicePixelRatio||1;
     canvas.width=CW*dpr;canvas.height=CH*dpr;
     const ctx=canvas.getContext("2d");
+    ctx.scale(dpr,dpr);
     let last=performance.now();
     const loop=now=>{
-      const dt=Math.min((now-last)/1000,0.05);last=now;
-      update(dt,now);draw(ctx,now);
+      const rawDt=Math.min((now-last)/1000,0.05);
+      const dt=rawDt*gameSpeedRef.current;
+      last=now;
+      update(dt,now);draw(ctx,now,selCellRef.current);
       const g=gRef.current;
       if(g){
         fRef.current++;
@@ -628,16 +654,54 @@ export default function ImmunoWar(){
   const startPlay=()=>{scrRef.current="game";setScreen("game");};
   const showMsg=(text,color="#EF9A9A")=>{setPlaceMsg({text,color});setTimeout(()=>setPlaceMsg(null),1400);};
 
+  const TARGET_MODES=["close","first","last","strong"];
+  const TARGET_LABELS={close:"CLOSE",first:"FIRST",last:"LAST",strong:"STRONG"};
+
+  const sellCell=()=>{
+    const g=gRef.current;if(!g||!selectedCell)return;
+    const idx=g.cells.findIndex(c=>c.id===selectedCell);if(idx<0)return;
+    const c=g.cells[idx];
+    const refund=Math.round(CELLS[c.type].cost*0.6);
+    g.energy=Math.min(ECAP,g.energy+refund);
+    g.cells.splice(idx,1);
+    addParts(g,c.x,c.y,CELLS[c.type].col,12);
+    setSelectedCell(null);
+  };
+
+  const cycleTarget=()=>{
+    const g=gRef.current;if(!g||!selectedCell)return;
+    const c=g.cells.find(c=>c.id===selectedCell);if(!c)return;
+    const cur=c.target||"close";
+    const next=TARGET_MODES[(TARGET_MODES.indexOf(cur)+1)%TARGET_MODES.length];
+    c.target=next;
+    setSelectedCell(selectedCell); // force re-render
+  };
+
   const handleClick=e=>{
     const g=gRef.current;if(!g||scrRef.current!=="game")return;
     const rect=e.currentTarget.getBoundingClientRect();
     const x=(e.clientX-rect.left)*(CW/rect.width),y=(e.clientY-rect.top)*(CH/rect.height);
+
+    // Check if clicking on an existing cell first
+    for(const c of g.cells){
+      const def=CELLS[c.type];
+      if(Math.hypot(x-c.x,y-c.y)<def.r+4){
+        setSelectedCell(prev=>prev===c.id?null:c.id);
+        return;
+      }
+    }
+
+    // Deselect if clicking empty space while something selected
+    if(selectedCell){setSelectedCell(null);return;}
+
     const type=selRef.current,def=CELLS[type];
     if(g.cells.length>=MAX_C){showMsg("No cell slots left");return;}
     if(g.energy<def.cost){showMsg(`Need ${def.cost}E (have ${Math.floor(g.energy)}E)`);return;}
     if(Math.hypot(x-CX,y-CY)<CR+def.r+8){showMsg("Too close to the core");return;}
     for(const c of g.cells)if(Math.hypot(x-c.x,y-c.y)<def.r+CELLS[c.type].r){showMsg("Too close to another cell");return;}
-    g.energy-=def.cost;g.cells.push({id:uid(),type,x,y,hp:def.maxHp,maxHp:def.maxHp,cd:0});SFX.play("place");
+    g.energy-=def.cost;
+    const newCell={id:uid(),type,x,y,hp:def.maxHp,maxHp:def.maxHp,cd:0,target:"close"};
+    g.cells.push(newCell);SFX.play("place");
   };
   const handleMM=e=>{const rect=e.currentTarget.getBoundingClientRect();mRef.current={x:(e.clientX-rect.left)*(CW/rect.width),y:(e.clientY-rect.top)*(CH/rect.height)};};
   const toggleSfx=()=>{SFX.muted=!SFX.muted;setSfxOn(v=>!v);};
@@ -669,6 +733,14 @@ export default function ImmunoWar(){
           ))}
         </div>
         <button onClick={()=>setScreen("character")} style={BS("linear-gradient(135deg,#00B0D8,#7B1FA2)")}>DEPLOY IMMUNE SYSTEM</button>
+        <button onClick={()=>setShowLb(v=>!v)} style={{marginTop:12,background:"transparent",border:"1px solid rgba(255,255,255,0.15)",borderRadius:4,color:"rgba(255,255,255,0.5)",fontSize:10,letterSpacing:3,padding:"8px 28px",cursor:"pointer",fontFamily:"monospace"}}>
+          {showLb?"HIDE LEADERBOARD":"LEADERBOARD"}
+        </button>
+        {showLb&&(
+          <div style={{marginTop:16,maxWidth:480,width:"100%"}}>
+            <Leaderboard scores={lb} currentScore={null} currentName={null}/>
+          </div>
+        )}
         {adminMode&&(
           <div style={{marginTop:24,padding:"16px 20px",background:"rgba(255,100,0,0.08)",border:"1px solid rgba(255,100,0,0.3)",borderRadius:8,maxWidth:480}}>
             <div style={{fontSize:9,letterSpacing:4,color:"#FF9800",marginBottom:10}}>ADMIN — LEVEL SELECT</div>
@@ -683,7 +755,6 @@ export default function ImmunoWar(){
             <button onClick={()=>setAdminMode(false)} style={{background:"transparent",border:"none",color:"rgba(255,255,255,0.3)",cursor:"pointer",fontFamily:"monospace",fontSize:9}}>CLOSE</button>
           </div>
         )}
-        {!adminMode&&<div style={{marginTop:14,fontSize:8,color:"rgba(255,255,255,0.12)",letterSpacing:1}}>type "admin" to unlock dev mode</div>}
       </div>
     </div>
   );
@@ -805,14 +876,15 @@ export default function ImmunoWar(){
           <span style={{marginLeft:"auto",display:"flex",gap:12,alignItems:"center"}}>
             <span style={{fontSize:10,color:"rgba(255,255,255,0.6)"}}>SCORE <span style={{color:"#fff",fontWeight:"bold"}}>{ui.score.toLocaleString()}</span></span>
             {g?.adminRun&&<span style={{fontSize:8,color:"#FF9800",letterSpacing:1}}>ADMIN</span>}
+            <button onClick={()=>{const s=gameSpeed===1?2:1;setGameSpeed(s);gameSpeedRef.current=s;}} style={{background:gameSpeed===2?"rgba(255,220,100,0.15)":"transparent",border:`1px solid ${gameSpeed===2?"rgba(255,220,100,0.5)":"rgba(255,255,255,0.2)"}`,borderRadius:3,color:gameSpeed===2?"#FFE082":"rgba(255,255,255,0.5)",fontSize:9,letterSpacing:2,padding:"2px 8px",cursor:"pointer",fontFamily:"monospace",fontWeight:"bold"}}>{gameSpeed===2?"2× SPEED":"1× SPEED"}</button>
             <button onClick={toggleSfx} style={{background:"transparent",border:"1px solid rgba(255,255,255,0.2)",borderRadius:3,color:sfxOn?"#80DEEA":"rgba(255,255,255,0.4)",fontSize:8,letterSpacing:2,padding:"2px 6px",cursor:"pointer",fontFamily:"monospace"}}>{sfxOn?"SFX ON":"SFX OFF"}</button>
           </span>
         </div>
         <div style={{display:"flex",flex:1,overflow:"hidden"}}>
           <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",position:"relative",background:ui.isBonus?"#120005":"#030f1d"}}>
-            <canvas ref={cvsRef} width={CW} height={CH}
+            <canvas ref={cvsRef}
               style={{display:"block",width:canvCss.w,height:canvCss.h,cursor:"crosshair"}}
-              onClick={handleClick} onMouseMove={handleMM} onMouseLeave={()=>{mRef.current={x:-999,y:-999};}}/>
+              onClick={handleClick} onMouseMove={handleMM} onMouseLeave={()=>{mRef.current={x:-999,y:-999};setSelectedCell(null);}}/>
             {placeMsg&&<div style={{position:"absolute",bottom:12,left:"50%",transform:"translateX(-50%)",background:"rgba(0,0,0,0.82)",border:`1px solid ${placeMsg.color}55`,borderRadius:5,padding:"5px 16px",fontSize:11,color:placeMsg.color,fontFamily:"monospace",pointerEvents:"none",whiteSpace:"nowrap"}}>{placeMsg.text}</div>}
           </div>
           <div style={{width:216,background:"rgba(0,0,0,0.58)",borderLeft:`1px solid ${ui.isBonus?"rgba(200,0,50,0.1)":"rgba(0,200,255,0.07)"}`,padding:12,display:"flex",flexDirection:"column",gap:10,overflowY:"auto",flexShrink:0}}>
@@ -830,6 +902,33 @@ export default function ImmunoWar(){
               </div>
               <div style={{fontSize:9,color:"rgba(255,255,255,0.65)",marginTop:1}}>{ui.energy}/{ECAP}</div>
             </div>
+
+            {/* Selected cell action panel */}
+            {selectedCell&&(()=>{
+              const sc=gRef.current?.cells.find(c=>c.id===selectedCell);
+              if(!sc)return null;
+              const def=CELLS[sc.type];
+              const refund=Math.round(def.cost*0.6);
+              const mode=sc.target||"close";
+              const bonus=def.catBonus?Object.entries(def.catBonus).map(([k,v])=>`+${Math.round((v-1)*100)}% vs ${k}`).join(", "):null;
+              return(
+                <div style={{padding:"9px 10px",background:"rgba(255,255,255,0.06)",borderRadius:7,border:`2px solid ${def.col}55`}}>
+                  <div style={{fontSize:10,fontWeight:"bold",color:def.col,marginBottom:5}}>{def.name} SELECTED</div>
+                  <div style={{fontSize:8,color:"rgba(255,255,255,0.55)",marginBottom:6}}>{bonus||"No category bonus"}</div>
+                  <div style={{fontSize:8,color:"rgba(255,255,255,0.45)",marginBottom:8}}>
+                    HP: {Math.ceil(sc.hp)}/{sc.maxHp}
+                  </div>
+                  <div style={{fontSize:7,color:"rgba(255,255,255,0.4)",marginBottom:4,letterSpacing:2}}>TARGETING</div>
+                  <div style={{display:"flex",gap:4,marginBottom:8,flexWrap:"wrap"}}>
+                    {TARGET_MODES.map(m=>(
+                      <button key={m} onClick={()=>{if(sc){sc.target=m;setSelectedCell(selectedCell);}}} style={{padding:"3px 7px",fontSize:8,background:mode===m?def.col+"33":"transparent",border:`1px solid ${mode===m?def.col:"rgba(255,255,255,0.15)"}`,borderRadius:3,color:mode===m?def.col:"rgba(255,255,255,0.5)",cursor:"pointer",fontFamily:"monospace"}}>{TARGET_LABELS[m]}</button>
+                    ))}
+                  </div>
+                  <button onClick={sellCell} style={{width:"100%",padding:"5px",fontSize:9,fontWeight:"bold",background:"rgba(239,83,80,0.15)",border:"1px solid rgba(239,83,80,0.35)",borderRadius:4,color:"#EF9A9A",cursor:"pointer",fontFamily:"monospace"}}>SELL (+{refund}E)</button>
+                  <button onClick={()=>setSelectedCell(null)} style={{width:"100%",marginTop:4,padding:"4px",fontSize:8,background:"transparent",border:"1px solid rgba(255,255,255,0.1)",borderRadius:4,color:"rgba(255,255,255,0.35)",cursor:"pointer",fontFamily:"monospace"}}>DESELECT</button>
+                </div>
+              );
+            })()}
 
             {/* Cell slots */}
             <div style={{padding:"8px 10px",background:"rgba(255,255,255,0.05)",borderRadius:6,border:"1px solid rgba(255,255,255,0.12)"}}>
