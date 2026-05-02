@@ -13,7 +13,7 @@ const SFX={ctx:null,muted:false,gc(){if(!this.ctx)try{this.ctx=new(window.AudioC
 
 // ─── CELLS ───────────────────────────────────────────────────────────────────
 const CELLS={
-  neutrophil:{name:"Neutrophil",cost:15,maxHp:60, dmg:9, range:88, aps:1.3, col:"#26C6DA",r:14,desc:"AoE splash. +25% vs bacteria.",splash:true,splashR:38,splashMult:0.45,catBonus:{bacteria:1.25}},
+  neutrophil:{name:"Neutrophil",cost:15,maxHp:60, dmg:7, range:95, aps:1.3, col:"#26C6DA",r:14,desc:"Multi-shot: fires at 3 targets at once. +25% vs bacteria.",multishot:3,catBonus:{bacteria:1.25}},
   macrophage:{name:"Macrophage",cost:30,maxHp:150,dmg:28,range:60, aps:0.55,col:"#66BB6A",r:21,desc:"Tank. +25% vs bacteria & fungi.",catBonus:{bacteria:1.25,fungi:1.25}},
   tcell:     {name:"T-Cell",    cost:25,maxHp:44, dmg:15,range:140,aps:2.2, col:"#FFA726",r:13,desc:"Rapid-fire. +25% vs virus & cancer.",catBonus:{virus:1.25,cancer:1.25}},
   bcell:     {name:"B-Cell",    cost:40,maxHp:38, dmg:25,range:215,aps:0.85,col:"#AB47BC",r:14,desc:"Long range. +25% vs virus.",catBonus:{virus:1.25}},
@@ -305,7 +305,11 @@ function drawEnemy(ctx,p,now){
 // ─── MAIN COMPONENT ──────────────────────────────────────────────────────────
 export default function ImmunoWar(){
   const [screen,     setScreen]    = useState("title");
-  const [chr,        setChr]       = useState({gender:"female",age:"young",name:""});
+  const [chr, setChr] = useState(()=>{
+    try{const s=localStorage.getItem("immunowar_player");return s?JSON.parse(s):{gender:"female",age:"young",name:""};}
+    catch{return{gender:"female",age:"young",name:""};}
+  });
+  const [showHowTo, setShowHowTo] = useState(false);
   const [sel,        setSel]       = useState("neutrophil");
   const [sfxOn,      setSfxOn]     = useState(true);
   const [briefing,   setBriefing]  = useState(null);
@@ -329,6 +333,7 @@ export default function ImmunoWar(){
   useEffect(()=>{gameSpeedRef.current=gameSpeed;},[gameSpeed]);
 
   useEffect(()=>{loadScores().then(setLb);},[]);
+  useEffect(()=>{try{localStorage.setItem("immunowar_player",JSON.stringify(chr));}catch{}},[chr]);
   useEffect(()=>{selRef.current=sel;},[sel]);
 
   // Responsive canvas sizing
@@ -349,6 +354,7 @@ export default function ImmunoWar(){
       if(map[e.key?.toLowerCase()])setSel(map[e.key.toLowerCase()]);
       adminKeysRef.current=(adminKeysRef.current+e.key).slice(-5);
       if(adminKeysRef.current==="admin"){setAdminMode(true);adminKeysRef.current="";}
+      if(e.code==="Space"&&scrRef.current==="game"){e.preventDefault();setPaused(v=>!v);}
     };
     window.addEventListener("keydown",h);return()=>window.removeEventListener("keydown",h);
   },[]);
@@ -482,17 +488,34 @@ export default function ImmunoWar(){
     for(const p of g.pathogens)for(const c of g.cells)if(Math.hypot(p.x-c.x,p.y-c.y)<p.r+CELLS[c.type].r+2){c.hp-=p.dmg*dt*3;if(c.hp<=0)addParts(g,c.x,c.y,CELLS[c.type].col,18);}
     g.cells=g.cells.filter(c=>c.hp>0);g.pathogens=g.pathogens.filter(p=>p.hp>0);
 
-    // Cell attack — closest enemy in range + category bonus
+    // Cell attack — multishot for neutrophil, single target for others + category bonus
     for(const c of g.cells){
       if(c.cd>0){c.cd-=dt;continue;}
       const def=CELLS[c.type];
-      let near=null,nd=Infinity;
-      for(const p of g.pathogens){const d=Math.hypot(p.x-c.x,p.y-c.y);if(d<=def.range&&d<nd){near=p;nd=d;}}
-      if(!near)continue;
-      c.cd=1/def.aps;
-      const catMult=def.catBonus?.[near.cat]||1;
-      const dmg=Math.round(def.dmg*(g.mods.cMult[c.type]||1)*g.mods.atkMult*catMult);
-      g.projs.push({id:uid(),x:c.x,y:c.y,tx:near.x,ty:near.y,tid:near.id,dmg,spd:300,col:catMult>1?"#ffffff":def.col,splash:def.splash||false,splashR:def.splashR||0,splashMult:def.splashMult||0});
+      const catBonusFn=(cat)=>def.catBonus?.[cat]||1;
+      if(def.multishot){
+        // Neutrophil: fire at nearest N enemies simultaneously
+        const targets=g.pathogens
+          .map(p=>({p,d:Math.hypot(p.x-c.x,p.y-c.y)}))
+          .filter(({d})=>d<=def.range)
+          .sort((a,b)=>a.d-b.d)
+          .slice(0,def.multishot);
+        if(!targets.length)continue;
+        c.cd=1/def.aps;
+        for(const{p:near}of targets){
+          const catMult=catBonusFn(near.cat);
+          const dmg=Math.round(def.dmg*(g.mods.cMult[c.type]||1)*g.mods.atkMult*catMult);
+          g.projs.push({id:uid(),x:c.x,y:c.y,tx:near.x,ty:near.y,tid:near.id,dmg,spd:300,col:catMult>1?"#ffffff":def.col,splash:false,splashR:0,splashMult:0});
+        }
+      } else {
+        let near=null,nd=Infinity;
+        for(const p of g.pathogens){const d=Math.hypot(p.x-c.x,p.y-c.y);if(d<=def.range&&d<nd){near=p;nd=d;}}
+        if(!near)continue;
+        c.cd=1/def.aps;
+        const catMult=catBonusFn(near.cat);
+        const dmg=Math.round(def.dmg*(g.mods.cMult[c.type]||1)*g.mods.atkMult*catMult);
+        g.projs.push({id:uid(),x:c.x,y:c.y,tx:near.x,ty:near.y,tid:near.id,dmg,spd:300,col:catMult>1?"#ffffff":def.col,splash:false,splashR:0,splashMult:0});
+      }
     }
 
     // Projectile movement + hit
@@ -505,19 +528,6 @@ export default function ImmunoWar(){
         if(tgt&&tgt.hp>0){
           tgt.hp-=pj.dmg;addParts(g,tgt.x,tgt.y,pj.col,3);
           if(tgt.hp<=0){g.energy=Math.min(ECAP,g.energy+tgt.rew);g.score+=tgt.rew*10;addParts(g,tgt.x,tgt.y,tgt.col,14);SFX.play("kill");if(tgt.splits)died.push({x:tgt.x,y:tgt.y});}
-        }
-        // Neutrophil splash AoE
-        if(pj.splash&&pj.splashR>0){
-          SFX.play("splash");
-          addParts(g,pj.tx,pj.ty,"#80DEFF",6);
-          for(const p2 of g.pathogens){
-            if(p2.id===pj.tid)continue;
-            if(Math.hypot(p2.x-pj.tx,p2.y-pj.ty)<pj.splashR){
-              const sd=Math.round(pj.dmg*pj.splashMult);
-              p2.hp-=sd;addParts(g,p2.x,p2.y,"#80DEFF",2);
-              if(p2.hp<=0){g.energy=Math.min(ECAP,g.energy+p2.rew);g.score+=p2.rew*10;addParts(g,p2.x,p2.y,p2.col,10);SFX.play("kill");if(p2.splits)died.push({x:p2.x,y:p2.y});}
-            }
-          }
         }
         pj.dead=true;
       } else {const st=Math.min(pj.spd*dt,d);pj.x+=dx/d*st;pj.y+=dy/d*st;}
@@ -570,8 +580,10 @@ export default function ImmunoWar(){
       ctx.fillStyle=g2;ctx.beginPath();ctx.arc(c.x,c.y,def.r*2.2,0,Math.PI*2);ctx.fill();
       ctx.beginPath();ctx.arc(c.x,c.y,def.r,0,Math.PI*2);ctx.fillStyle=def.col;ctx.fill();
       ctx.strokeStyle="#ffffffcc";ctx.lineWidth=1.5;ctx.stroke();
-      // Neutrophil: splash ring indicator
-      if(def.splash){ctx.setLineDash([2,3]);ctx.beginPath();ctx.arc(c.x,c.y,def.splashR,0,Math.PI*2);ctx.strokeStyle=def.col+"44";ctx.lineWidth=1;ctx.stroke();ctx.setLineDash([]);}
+      // Neutrophil: multishot indicator (3 dots)
+      if(def.multishot){
+        for(let mi=0;mi<3;mi++){const a=mi/3*Math.PI*2-Math.PI/2;ctx.beginPath();ctx.arc(c.x+Math.cos(a)*(def.r+6),c.y+Math.sin(a)*(def.r+6),2,0,Math.PI*2);ctx.fillStyle=def.col+"99";ctx.fill();}
+      }
       const hp2=c.hp/c.maxHp;
       ctx.fillStyle="#0008";ctx.fillRect(c.x-def.r,c.y+def.r+2,def.r*2,3);
       ctx.fillStyle=hp2>0.5?"#66BB6A":hp2>0.25?"#FFD54F":"#EF5350";ctx.fillRect(c.x-def.r,c.y+def.r+2,def.r*2*hp2,3);
@@ -655,11 +667,6 @@ export default function ImmunoWar(){
   const pausedRef = useRef(false);
   useEffect(()=>{pausedRef.current=paused;},[paused]);
 
-  // Spacebar to pause
-  useEffect(()=>{
-    const h=e=>{if(e.code==="Space"&&scrRef.current==="game"){e.preventDefault();setPaused(v=>!v);}};
-    window.addEventListener("keydown",h);return()=>window.removeEventListener("keydown",h);
-  },[]);
 
   const sellCell=()=>{
     const g=gRef.current;if(!g||!selectedCell)return;
@@ -734,7 +741,25 @@ export default function ImmunoWar(){
     dragRef.current=null;
   };
 
-  const handleClick=e=>{
+  const handleContextMenu=e=>{
+    e.preventDefault();
+    const g=gRef.current;if(!g||scrRef.current!=="game")return;
+    const rect=cvsRef.current?.getBoundingClientRect();if(!rect)return;
+    const x=(e.clientX-rect.left)*(CW/rect.width),y=(e.clientY-rect.top)*(CH/rect.height);
+    for(const c of g.cells){
+      if(Math.hypot(x-c.x,y-c.y)<CELLS[c.type].r+10){
+        setSelectedCell(c.id);
+        // Sell immediately on right-click
+        const refund=Math.round(CELLS[c.type].cost*0.6);
+        g.energy=Math.min(ECAP,g.energy+refund);
+        addParts(g,c.x,c.y,CELLS[c.type].col,12);
+        g.cells.splice(g.cells.indexOf(c),1);
+        setSelectedCell(null);
+        showMsg(`Sold for +${refund}E`,"#A5D6A7");
+        return;
+      }
+    }
+  };
     const g=gRef.current;if(!g||scrRef.current!=="game")return;
     const rect=e.currentTarget.getBoundingClientRect();
     const x=(e.clientX-rect.left)*(CW/rect.width),y=(e.clientY-rect.top)*(CH/rect.height);
@@ -785,9 +810,10 @@ export default function ImmunoWar(){
         </div>
         <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:12}}>
           <button onClick={()=>setScreen("character")} style={BS("linear-gradient(135deg,#00B0D8,#7B1FA2)")}>DEPLOY IMMUNE SYSTEM</button>
-          <button onClick={()=>setShowLb(v=>!v)} style={{background:"transparent",border:"1px solid rgba(255,255,255,0.15)",borderRadius:4,color:"rgba(255,255,255,0.5)",fontSize:10,letterSpacing:3,padding:"8px 28px",cursor:"pointer",fontFamily:"monospace"}}>
-            {showLb?"HIDE LEADERBOARD":"LEADERBOARD"}
-          </button>
+          <div style={{display:"flex",gap:10}}>
+            <button onClick={()=>setShowHowTo(true)} style={{background:"transparent",border:"1px solid rgba(255,255,255,0.15)",borderRadius:4,color:"rgba(255,255,255,0.5)",fontSize:10,letterSpacing:3,padding:"7px 20px",cursor:"pointer",fontFamily:"monospace"}}>HOW TO PLAY</button>
+            <button onClick={()=>setShowLb(v=>!v)} style={{background:"transparent",border:"1px solid rgba(255,255,255,0.15)",borderRadius:4,color:"rgba(255,255,255,0.5)",fontSize:10,letterSpacing:3,padding:"7px 20px",cursor:"pointer",fontFamily:"monospace"}}>{showLb?"HIDE SCORES":"LEADERBOARD"}</button>
+          </div>
         </div>
         {showLb&&(
           <div style={{marginTop:16,maxWidth:480,width:"100%"}}>
@@ -808,6 +834,87 @@ export default function ImmunoWar(){
             <button onClick={()=>setAdminMode(false)} style={{background:"transparent",border:"none",color:"rgba(255,255,255,0.3)",cursor:"pointer",fontFamily:"monospace",fontSize:9}}>CLOSE</button>
           </div>
         )}
+      </div>
+    </div>
+  );
+
+  if(showHowTo)return(
+    <div style={{minHeight:"100vh",background:"#020c18",fontFamily:"monospace",color:"#e8f4f8",padding:"28px 20px",overflowY:"auto"}}>
+      <div style={{maxWidth:620,margin:"0 auto"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:24}}>
+          <div style={{fontSize:22,fontWeight:900,letterSpacing:4,color:"#80DEEA"}}>HOW TO PLAY</div>
+          <button onClick={()=>setShowHowTo(false)} style={{background:"transparent",border:"1px solid rgba(255,255,255,0.2)",borderRadius:4,color:"rgba(255,255,255,0.5)",fontSize:11,letterSpacing:2,padding:"6px 16px",cursor:"pointer",fontFamily:"monospace"}}>CLOSE</button>
+        </div>
+
+        {/* Objective */}
+        <Section title="OBJECTIVE" col="#80DEEA">
+          Defend the glowing blue core at the center of the arena. Pathogens spawn from the edges and move toward it. If enough reach the core your body HP drops to zero and the infection wins. Clear all waves in a level to advance.
+        </Section>
+
+        {/* Controls */}
+        <Section title="CONTROLS" col="#FFE082">
+          <Row label="Place cell" val="Click empty arena space" />
+          <Row label="Select cell" val="Click a placed cell" />
+          <Row label="Move cell" val="Click cell then drag to new spot" />
+          <Row label="Destroy cell" val="Select cell → DESTROY in sidebar" />
+          <Row label="Pause" val="Spacebar or ⏸ button" />
+          <Row label="Speed" val="1× / 2× / 3× button in header" />
+          <Row label="Hotkeys" val="N · M · T · B to switch cell type" />
+        </Section>
+
+        {/* Cells */}
+        <Section title="YOUR IMMUNE CELLS" col="#A5D6A7">
+          {Object.entries(CELLS).map(([k,c])=>(
+            <div key={k} style={{display:"flex",alignItems:"flex-start",gap:10,marginBottom:10}}>
+              <div style={{width:14,height:14,borderRadius:"50%",background:c.col,flexShrink:0,marginTop:2}}/>
+              <div>
+                <span style={{color:c.col,fontWeight:"bold",fontSize:12}}>{c.name}</span>
+                <span style={{color:"rgba(255,255,255,0.5)",fontSize:10}}> · {c.cost}E to place</span>
+                <div style={{fontSize:10,color:"rgba(255,255,255,0.65)",marginTop:2}}>{c.desc}</div>
+                {c.catBonus&&<div style={{fontSize:9,color:"rgba(255,220,100,0.6)",marginTop:1}}>{Object.entries(c.catBonus).map(([cat,v])=>`+${Math.round((v-1)*100)}% vs ${cat}`).join(" · ")}</div>}
+              </div>
+            </div>
+          ))}
+        </Section>
+
+        {/* Enemy types */}
+        <Section title="ENEMY CATEGORIES" col="#EF9A9A">
+          {Object.entries(CAT_META).filter(([k])=>k!=="cancer").map(([k,v])=>(
+            <div key={k} style={{display:"flex",alignItems:"flex-start",gap:10,marginBottom:10}}>
+              <div style={{width:14,height:14,borderRadius:"50%",background:v.col,flexShrink:0,marginTop:2}}/>
+              <div>
+                <span style={{color:v.col,fontWeight:"bold",fontSize:12}}>{v.label}</span>
+                <div style={{fontSize:10,color:"rgba(255,255,255,0.65)",marginTop:2}}>
+                  {k==="virus"   ?"Dart toward the core with a slight wobble. Spiky sphere shape.":
+                   k==="bacteria"?"Steady sinusoidal weave. Pill/rod shape with flagella tail.":
+                   k==="fungi"   ?"Slow ooze with irregular drift. Lumpy blob with hyphae tips.":
+                                  "Aggressive S-curve zigzag. Segmented worm body."}
+                </div>
+              </div>
+            </div>
+          ))}
+          <div style={{display:"flex",alignItems:"flex-start",gap:10,marginTop:4}}>
+            <div style={{width:14,height:14,borderRadius:"50%",background:"#8B0000",flexShrink:0,marginTop:2}}/>
+            <div>
+              <span style={{color:"#EF5350",fontWeight:"bold",fontSize:12}}>CANCER</span>
+              <div style={{fontSize:10,color:"rgba(255,255,255,0.65)",marginTop:2}}>Bonus round only. Cells split on death. Tumors spawn reinforcements every 4.5 seconds.</div>
+            </div>
+          </div>
+        </Section>
+
+        {/* Tips */}
+        <Section title="TIPS" col="#CE93D8">
+          <div style={{fontSize:11,color:"rgba(255,255,255,0.7)",lineHeight:1.8}}>
+            · Each run draws a different random enemy mix — every playthrough teaches you new pathogens.<br/>
+            · Neutrophils deal AoE splash damage — ideal against fast swarms.<br/>
+            · B-Cells and T-Cells do 25% more damage to their specialty enemies.<br/>
+            · Sell a cell for 60% of its cost back and reposition it mid-game.<br/>
+            · Set a checkpoint at any level — gives you 2 respawn chances if you die.<br/>
+            · Beat all 10 levels to unlock the Bonus Cancer Round.
+          </div>
+        </Section>
+
+        <button onClick={()=>setShowHowTo(false)} style={{...BS("linear-gradient(135deg,#00B0D8,#7B1FA2)"),marginTop:16}}>LET'S GO</button>
       </div>
     </div>
   );
@@ -937,11 +1044,12 @@ export default function ImmunoWar(){
         <div style={{display:"flex",flex:1,overflow:"hidden"}}>
           <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",position:"relative",background:ui.isBonus?"#120005":"#030f1d"}}>
             <canvas ref={cvsRef}
-              style={{display:"block",width:canvCss.w,height:canvCss.h,cursor:selectedCell?"grab":"crosshair"}}
+              style={{display:"block",width:canvCss.w,height:canvCss.h,cursor:dragRef.current?"grabbing":selectedCell?"grab":"crosshair"}}
               onClick={handleClick}
               onMouseDown={handleMouseDown}
               onMouseMove={handleMouseMove}
               onMouseUp={handleMouseUp}
+              onContextMenu={handleContextMenu}
               onMouseLeave={()=>{handleMouseUp();mRef.current={x:-999,y:-999};}}/>
             {paused&&(
               <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.55)",pointerEvents:"none"}}>
@@ -1029,7 +1137,12 @@ export default function ImmunoWar(){
               ))}
             </div>
             {ui.isBonus&&<div style={{padding:"7px 9px",background:"rgba(139,0,0,0.2)",borderRadius:5,border:"1px solid rgba(200,0,50,0.25)",fontSize:8,color:"rgba(255,170,170,0.85)",lineHeight:1.6}}>Cancer cells split on death. Tumors spawn reinforcements.</div>}
-            <div style={{marginTop:"auto",fontSize:7,color:"rgba(255,255,255,0.35)",lineHeight:1.8}}>Click arena to place.<br/>Keys: N M T B</div>
+            <div style={{marginTop:"auto",fontSize:7,color:"rgba(255,255,255,0.35)",lineHeight:1.9}}>
+              Click arena to place.<br/>
+              Click cell to select + drag.<br/>
+              Right-click cell to sell.<br/>
+              Keys: N M T B · Space = pause
+            </div>
           </div>
         </div>
       </div>
@@ -1131,6 +1244,24 @@ export default function ImmunoWar(){
   }
 
   return null;
+}
+
+// ─── HOW TO PLAY HELPERS ─────────────────────────────────────────────────────
+function Section({title,col,children}){
+  return(
+    <div style={{marginBottom:22}}>
+      <div style={{fontSize:9,letterSpacing:4,color:col,marginBottom:10,borderBottom:`1px solid ${col}33`,paddingBottom:6}}>{title}</div>
+      <div style={{fontSize:11,color:"rgba(255,255,255,0.7)",lineHeight:1.75}}>{children}</div>
+    </div>
+  );
+}
+function Row({label,val}){
+  return(
+    <div style={{display:"flex",gap:12,marginBottom:5}}>
+      <span style={{color:"rgba(255,255,255,0.4)",minWidth:120,fontSize:10}}>{label}</span>
+      <span style={{color:"rgba(255,255,255,0.75)",fontSize:10}}>{val}</span>
+    </div>
+  );
 }
 
 // ─── LEADERBOARD ─────────────────────────────────────────────────────────────
