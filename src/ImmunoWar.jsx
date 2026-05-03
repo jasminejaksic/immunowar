@@ -5,7 +5,7 @@ const MAX_C = 15, ECAP = 200;
 
 // ─── STORAGE ─────────────────────────────────────────────────────────────────
 const LB_KEY = "immunowar_lb_v3";
-async function loadScores(){try{const r=await window.storage.get(LB_KEY);return r?JSON.parse(r.value):[];}catch{return[];}}
+async function loadScores(){try{const _r=null;const d=localStorage.getItem(LB_KEY);return d?JSON.parse(d):[];}catch{return[];}}
 async function saveScore(e){try{const s=await loadScores();s.push(e);s.sort((a,b)=>b.score-a.score);const t=s.slice(0,10);localStorage.setItem(LB_KEY,JSON.stringify(t));return t;}catch{return[];}}
 
 // ─── SFX ─────────────────────────────────────────────────────────────────────
@@ -231,7 +231,7 @@ export default function ImmunoWar(){
   const mRef=useRef({x:-999,y:-999}),fRef=useRef(0);
   const adminKeysRef=useRef(""),retryRef=useRef(null);
   const gameSpeedRef=useRef(1),pausedRef=useRef(false);
-  const selCellRef=useRef(null),dragRef=useRef(null);
+  const selCellRef=useRef(null),dragRef=useRef(null),cpRef=useRef(null);
 
   useEffect(()=>{loadScores().then(setLb);},[]);
   useEffect(()=>{try{localStorage.setItem("immunowar_player",JSON.stringify(chr));}catch{}},[chr]);
@@ -239,6 +239,7 @@ export default function ImmunoWar(){
   useEffect(()=>{gameSpeedRef.current=gameSpeed;},[gameSpeed]);
   useEffect(()=>{pausedRef.current=paused;},[paused]);
   useEffect(()=>{selCellRef.current=selectedCell;},[selectedCell]);
+  useEffect(()=>{cpRef.current=checkpoint;},[checkpoint]);
 
   useEffect(()=>{
     const fit=()=>{const sw=216,hh=38;const aw=Math.max(280,window.innerWidth-sw-2);const ah=Math.max(180,window.innerHeight-hh);const scale=Math.min(aw/CW,ah/CH,1.5);setCanvCss({w:Math.floor(CW*scale),h:Math.floor(CH*scale)});};
@@ -261,7 +262,7 @@ export default function ImmunoWar(){
 
   const initGame=ch=>{const mods=getMods(ch);const comp=generateCompositions();gRef.current=makeG(mods,0,false,comp,mods.eStart);retryRef.current={ch,lvl:0,isBonus:false,comp,checkpoint:null,cpLeft:2};setCheckpoint(null);setCpLeft(2);setBriefing({lvl:0,isBonus:false});scrRef.current="briefing";setScreen("briefing");};
 
-  const quickRetry=()=>{const r=retryRef.current;if(!r)return;const mods=getMods(r.ch);const prevScore=gRef.current?.score||0;gRef.current=makeG(mods,r.lvl,r.isBonus,r.comp,ECAP);gRef.current.score=prevScore;setCheckpoint(r.checkpoint);setCpLeft(r.cpLeft);setSelectedCell(null);setGameSpeed(1);gameSpeedRef.current=1;scrRef.current="game";setScreen("game");};
+  const quickRetry=()=>{const _r=retryRef.current;if(!r)return;const mods=getMods(r.ch);const prevScore=gRef.current?.score||0;gRef.current=makeG(mods,r.lvl,r.isBonus,r.comp,ECAP);gRef.current.score=prevScore;setCheckpoint(r.checkpoint);setCpLeft(r.cpLeft);setSelectedCell(null);setGameSpeed(1);gameSpeedRef.current=1;scrRef.current="game";setScreen("game");};
 
   const respawnAtCheckpoint=()=>{const g=gRef.current,cp=checkpoint;const lev=getLev(g,cp.lvl);g.lvl=cp.lvl;g.wave=0;g.totalWaves=lev.waves;g.phase="waveIdle";g.wideStart=null;g.pathogens=[];g.projs=[];g.cells=[];g.bodyHp=Math.round(g.maxHp*0.65);g.energy=ECAP;g.isBonus=cp.isBonus;const newLeft=cpLeft-1;setCpLeft(newLeft);retryRef.current={...retryRef.current,lvl:cp.lvl,isBonus:cp.isBonus,checkpoint,cpLeft:newLeft};setBriefing({lvl:cp.lvl,isBonus:cp.isBonus});scrRef.current="briefing";setScreen("briefing");};
 
