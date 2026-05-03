@@ -231,7 +231,7 @@ export default function ImmunoWar(){
   const mRef=useRef({x:-999,y:-999}),fRef=useRef(0);
   const adminKeysRef=useRef(""),retryRef=useRef(null);
   const gameSpeedRef=useRef(1),pausedRef=useRef(false);
-  const selCellRef=useRef(null),dragRef=useRef(null),cpRef=useRef(null);
+  const selCellRef=useRef(null),dragRef=useRef(null),cpSnapshotRef=useRef([]),cpLvlRef=useRef(null),cpRef=useRef(null);
 
   useEffect(()=>{loadScores().then(setLb);},[]);
   useEffect(()=>{try{localStorage.setItem("immunowar_player",JSON.stringify(chr));}catch{}},[chr]);
@@ -239,6 +239,7 @@ export default function ImmunoWar(){
   useEffect(()=>{gameSpeedRef.current=gameSpeed;},[gameSpeed]);
   useEffect(()=>{pausedRef.current=paused;},[paused]);
   useEffect(()=>{selCellRef.current=selectedCell;},[selectedCell]);
+  useEffect(()=>{cpLvlRef.current=checkpoint;},[checkpoint]);
   useEffect(()=>{cpRef.current=checkpoint;},[checkpoint]);
 
   useEffect(()=>{
@@ -264,7 +265,7 @@ export default function ImmunoWar(){
 
   const quickRetry=()=>{const _r=retryRef.current;if(!r)return;const mods=getMods(r.ch);const prevScore=gRef.current?.score||0;gRef.current=makeG(mods,r.lvl,r.isBonus,r.comp,ECAP);gRef.current.score=prevScore;setCheckpoint(r.checkpoint);setCpLeft(r.cpLeft);setSelectedCell(null);setGameSpeed(1);gameSpeedRef.current=1;scrRef.current="game";setScreen("game");};
 
-  const respawnAtCheckpoint=()=>{const g=gRef.current,cp=checkpoint;const lev=getLev(g,cp.lvl);g.lvl=cp.lvl;g.wave=0;g.totalWaves=lev.waves;g.phase="waveIdle";g.wideStart=null;g.pathogens=[];g.projs=[];g.cells=[];g.bodyHp=Math.round(g.maxHp*0.65);g.energy=ECAP;g.isBonus=cp.isBonus;const newLeft=cpLeft-1;setCpLeft(newLeft);retryRef.current={...retryRef.current,lvl:cp.lvl,isBonus:cp.isBonus,checkpoint,cpLeft:newLeft};setBriefing({lvl:cp.lvl,isBonus:cp.isBonus});scrRef.current="briefing";setScreen("briefing");};
+  const respawnAtCheckpoint=()=>{const g=gRef.current,cp=checkpoint;const lev=getLev(g,cp.lvl);g.lvl=cp.lvl;g.wave=0;g.totalWaves=lev.waves;g.phase="waveIdle";g.wideStart=null;g.pathogens=[];g.projs=[];g.cells=cpSnapshotRef.current.map(x=>({...x,hp:CELLS[x.type].maxHp,cd:0}));g.bodyHp=Math.round(g.maxHp*0.65);g.energy=ECAP;g.isBonus=cp.isBonus;const newLeft=cpLeft-1;setCpLeft(newLeft);retryRef.current={...retryRef.current,lvl:cp.lvl,isBonus:cp.isBonus,checkpoint,cpLeft:newLeft};setBriefing({lvl:cp.lvl,isBonus:cp.isBonus});scrRef.current="briefing";setScreen("briefing");};
 
   const jumpToLevel=(lvl,isBonus)=>{const mods=getMods(chr);const comp=generateCompositions();gRef.current=makeG(mods,lvl,isBonus,comp,ECAP,true);setBriefing({lvl,isBonus});scrRef.current="briefing";setScreen("briefing");};
 
@@ -276,7 +277,7 @@ export default function ImmunoWar(){
     const g=gRef.current;if(!g||scrRef.current!=="game")return;
     g.energy=Math.min(ECAP,g.energy+g.eRegen*dt);
     const lev=getLev(g,g.lvl);
-    if(g.phase==="waveIdle"){if(!g.wideStart)g.wideStart=now;g.countdown=Math.max(0,4000-(now-g.wideStart));if(now-g.wideStart>4000){g.wave++;g.phase="spawning";g.wideStart=null;g.spawnQ=buildQ(lev,g.wave,now);}}
+    if(g.phase==="waveIdle"){if(!g.wideStart)g.wideStart=now;g.countdown=Math.max(0,4000-(now-g.wideStart));if(now-g.wideStart>4000){g.wave++;g.phase="spawning";g.wideStart=null;g.spawnQ=buildQ(lev,g.wave,now);if(g.wave===1){const _cp=cpLvlRef.current;if(_cp&&_cp.lvl===g.lvl&&_cp.isBonus===g.isBonus){cpSnapshotRef.current=g.cells.map(x=>({...x,hp:CELLS[x.type].maxHp,cd:0}));}}}}
     if(g.phase==="spawning"){while(g.spawnQ.length&&g.spawnQ[0].at<=now){const{type,scale}=g.spawnQ.shift();const{x,y}=edgePt();spawnPath(g,type,x,y,scale);}if(!g.spawnQ.length)g.phase="fighting";}
     if(g.phase==="fighting"&&!g.pathogens.length&&!g.projs.length){if(g.wave>=g.totalWaves){g.phase="levelDone";SFX.play("levelEnd");}else{g.phase="waveIdle";g.wideStart=null;SFX.play("waveEnd");}}
 
