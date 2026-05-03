@@ -301,12 +301,12 @@ export default function ImmunoWar(){
         const targets=g.pathogens.map(p=>({p,d:Math.hypot(p.x-c.x,p.y-c.y)})).filter(({d})=>d<=def.range).sort((a,b)=>a.d-b.d).slice(0,def.multishot);
         if(!targets.length)continue;
         c.cd=1/def.aps;
-        for(const{p:near}of targets){const catMult=def.catBonus?.[near.cat]||1;const dmg=Math.round(def.dmg*(g.mods.cMult[c.type]||1)*g.mods.atkMult*catMult);g.projs.push({id:uid(),x:c.x,y:c.y,tx:near.x,ty:near.y,tid:near.id,dmg,spd:300,col:catMult>1?"#fff":def.col});}
+        for(const{p:near}of targets){const catMult=def.catBonus?.[near.cat]||1;const dmg=Math.round(def.dmg*(g.mods.cMult[c.type]||1)*g.mods.atkMult*catMult);g.projs.push({id:uid(),x:c.x,y:c.y,tx:near.x,ty:near.y,tid:near.id,dmg,spd:300,col:catMult>1?"#ffffff":def.col});}
       } else {
         let near=null,nd=Infinity;for(const p of g.pathogens){const d=Math.hypot(p.x-c.x,p.y-c.y);if(d<=def.range&&d<nd){near=p;nd=d;}}
         if(!near)continue;
         c.cd=1/def.aps;const catMult=def.catBonus?.[near.cat]||1;const dmg=Math.round(def.dmg*(g.mods.cMult[c.type]||1)*g.mods.atkMult*catMult);
-        g.projs.push({id:uid(),x:c.x,y:c.y,tx:near.x,ty:near.y,tid:near.id,dmg,spd:300,col:catMult>1?"#fff":def.col});
+        g.projs.push({id:uid(),x:c.x,y:c.y,tx:near.x,ty:near.y,tid:near.id,dmg,spd:300,col:catMult>1?"#ffffff":def.col});
       }
     }
 
