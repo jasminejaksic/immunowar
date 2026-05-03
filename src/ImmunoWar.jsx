@@ -6,7 +6,7 @@ const MAX_C = 15, ECAP = 200;
 // ─── STORAGE ─────────────────────────────────────────────────────────────────
 const LB_KEY = "immunowar_lb_v3";
 async function loadScores(){try{const r=await window.storage.get(LB_KEY);return r?JSON.parse(r.value):[];}catch{return[];}}
-async function saveScore(e){try{const s=await loadScores();s.push(e);s.sort((a,b)=>b.score-a.score);const t=s.slice(0,10);await window.storage.set(LB_KEY,JSON.stringify(t));return t;}catch{return[];}}
+async function saveScore(e){try{const s=await loadScores();s.push(e);s.sort((a,b)=>b.score-a.score);const t=s.slice(0,10);localStorage.setItem(LB_KEY,JSON.stringify(t));return t;}catch{return[];}}
 
 // ─── SFX ─────────────────────────────────────────────────────────────────────
 const SFX={ctx:null,muted:false,gc(){if(!this.ctx)try{this.ctx=new(window.AudioContext||window.webkitAudioContext)();}catch(e){}return this.ctx;},play(type){if(this.muted)return;const ac=this.gc();if(!ac)return;try{if(ac.state==="suspended")ac.resume();const t=ac.currentTime;const T=(f,w,g,d,e,a=0)=>{const o=ac.createOscillator(),gn=ac.createGain();o.connect(gn);gn.connect(ac.destination);o.type=w;o.frequency.setValueAtTime(f,t+a);if(e)o.frequency.exponentialRampToValueAtTime(e,t+a+d);gn.gain.setValueAtTime(g,t+a);gn.gain.exponentialRampToValueAtTime(0.001,t+a+d);o.start(t+a);o.stop(t+a+d+0.01);};switch(type){case"place":T(440,"sine",0.10,0.09,220);break;case"kill":T(290,"sine",0.15,0.13,80);break;case"split":T(600,"sine",0.08,0.07,180);break;case"coreHit":T(90,"sine",0.22,0.20,45);break;case"gameOver":[440,350,220].forEach((f,i)=>T(f,"sawtooth",0.07,0.24,null,i*0.18));break;case"waveEnd":[440,550,660].forEach((f,i)=>T(f,"sine",0.10,0.14,null,i*0.08));break;case"levelEnd":[523,659,784].forEach((f,i)=>T(f,"sine",0.09,0.45,null,i*0.03));break;case"bonusStart":[200,160,130,100].forEach((f,i)=>T(f,"sine",0.11,0.35,null,i*0.14));break;case"victory":[523,659,784,1047].forEach((f,i)=>T(f,"sine",0.10,0.50,null,i*0.09));break;}}catch(e){}}};
@@ -799,11 +799,7 @@ export default function ImmunoWar(){
             <div style={{fontSize:9,color:"rgba(255,255,255,0.35)",marginTop:6}}>65% HP · full energy · fresh army</div>
           </div>
         )}
-        <div style={{marginBottom:16,padding:"10px 18px",background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:7,textAlign:"center"}}>
-          <div style={{fontSize:9,color:"rgba(255,255,255,0.45)",letterSpacing:2,marginBottom:7}}>RETRY THIS LEVEL — SCORE CARRIES OVER</div>
-          <button onClick={quickRetry} style={{...BS("linear-gradient(135deg,#37474F,#546E7A)"),padding:"8px 24px",fontSize:11}}>QUICK RETRY</button>
-          <div style={{fontSize:9,color:"rgba(255,255,255,0.28)",marginTop:5}}>full energy · same level · no briefing</div>
-        </div>
+        
         <div style={{marginBottom:16,width:"100%",maxWidth:480}}><Leaderboard scores={lb} currentScore={g?.score} currentName={chr.name}/></div>
         <div style={{display:"flex",gap:10}}>
           <button onClick={()=>{scrRef.current="character";setScreen("character");}} style={BS("linear-gradient(135deg,#D32F2F,#7B1FA2)")}>NEW RUN</button>
